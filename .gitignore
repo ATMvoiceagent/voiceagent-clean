@@ -1,0 +1,22 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn.lock
+package-lock.json
+
+# Twilio Serverless build artifacts
+.twilio-functions
+.twilio-asset-pipeline
+
+# Local env & secrets (DO NOT COMMIT)
+.env
+.env.*
+*.local
+
+# OS/editor junk
+.DS_Store
+*.swp
+*.swo
+
+# If you’ve exported old backups
+*_trash/
