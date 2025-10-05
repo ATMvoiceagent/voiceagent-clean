@@ -1,140 +1,150 @@
-// /functions/issues-mini.js
-// Mini issues triage with speech, one nudge then goodbye, and geo-reboot path.
+// Option 3: Issues mini — robust intent matching + pacing + geo-reboot / claims
+exports.handler = async function(context, event, callback) {
+  const twiml = new Twilio.twiml.VoiceResponse();
+  const client = context.getTwilioClient();
 
-exports.handler = async (context, event, callback) => {
-  const twiml = new (require('twilio').twiml.VoiceResponse)();
-  const voice = context.POLLY_VOICE || 'Polly.Joanna-Neural';
+  const VOICE = 'Polly.Joanna-Neural';
+  const LANG  = 'en-US';
+  const NUDGE_MAX = 1; // one retry, then goodbye
 
-  const hdrs = event.headers || {};
-  const proto = hdrs['x-forwarded-proto'] || hdrs['X-Forwarded-Proto'] || 'https';
-  const host  = hdrs.host || hdrs.Host || (context.DOMAIN_NAME || '').replace(/^https?:\/\//,'') || 'example.twil.io';
-  const base  = `${proto}://${host}`;
+  // ENV
+  const SMS_FROM  = context.SMS_FROM || '';
+  const MSG_SID   = context.MESSAGING_SERVICE_SID || ''; // optional
+  const GEO_URL   = context.GEO_URL || 'https://citvan-clean-6447-ui.twil.io/assist.html?mode=geo';
+  const CLAIM_LINK= context.CLAIM_LINK || 'https://citvan-clean-6447-ui.twil.io/claim.html';
 
-  const CLAIM_LINK = context.CLAIM_LINK || `${base}/claim.html`;
-  const GEO_URL    = context.GEO_URL    || `${base}/assist.html?mode=geo`;
+  // Helpers
+  const say = (text) => twiml.say({ voice: VOICE, language: LANG }, text);
+  const pause = (sec=1) => twiml.pause({ length: sec });
 
-  // nudge helper: one nudge then goodbye
-  const NU = String(event.n || '0');
-  const goodbyeOrNudge = (retryUrl) => {
-    if (NU === '1') {
-      twiml.say({ voice }, "Okay, call us back if you would like more information. Goodbye.");
+  const baseUrl = context.DOMAIN_NAME ? `https://${context.DOMAIN_NAME}` : '';
+
+  const withNudge = (nextUrl, n=0, prompts=[]) => {
+    prompts.forEach((p, i) => { say(p); if (i < prompts.length - 1) pause(1); });
+    const nudges = Number(n) || 0;
+    if (nudges >= NUDGE_MAX) {
+      pause(1);
+      say("Okay, call us back if you would like more information. Goodbye.");
       twiml.hangup();
-      return true;
+      return callback(null, twiml);
     }
-    twiml.redirect({ method: 'POST' }, `${retryUrl}${retryUrl.includes('?') ? '&' : '?'}n=1`);
-    return false;
+    twiml.gather({
+      method: 'POST',
+      input: 'speech',
+      timeout: 7,
+      speechTimeout: 'auto',
+      hints: 'my card is stuck, card is stuck, the screen is frozen, screen frozen, I did not get my money, I did not get my cash, didn’t get my money',
+      action: `${nextUrl}&n=${nudges + 1}`,
+      actionOnEmptyResult: true
+    });
+    return callback(null, twiml);
   };
 
-  const step = event.step || 'start';
+  const detectIntent = (raw='') => {
+    const t = (raw || '').toLowerCase().trim();
+    const has = (w) => t.includes(w);
+    const any = (...ws) => ws.some(w => has(w));
+    const both = (a,b) => has(a) && has(b);
 
-  // --- Step: start (ask for issue) ---
+    if (both('card','stuck') || any('my card is stuck','card is stuck','stuck card','kept my card','ate my card','swallowed my card','card retained','card capture')) {
+      return 'card_stuck';
+    }
+    if (any('screen is frozen','the screen is frozen','screen frozen','frozen screen','screen unresponsive','screen not responding','touchscreen not responding')) {
+      return 'screen_frozen';
+    }
+    if (any("didn't get my money","didnt get my money","did not get my money","didn't get cash","didnt get cash","no cash","money not dispensed","cash not received","didn't receive money","didnt receive money","dispense failed")) {
+      return 'no_cash';
+    }
+    return 'unknown';
+  };
+
+  const step = (event.step || 'start').toLowerCase();
+  const n = event.n || 0;
+
   if (step === 'start') {
-    const g = twiml.gather({
-      method: 'POST',
-      input: 'speech',
-      timeout: 7,
-      speechTimeout: 'auto',
-      action: `${base}/issues-mini?step=first`,
-      actionOnEmptyResult: true
-    });
-    g.say({ voice, language: 'en-US' },
-      "Alright, briefly describe the issue you're having with the A T M. You can say, card stuck, screen frozen or I did not get my money.");
-    if (!goodbyeOrNudge(`${base}/issues-mini?step=start`)) {}
-    return callback(null, twiml);
+    return withNudge(
+      `${baseUrl}/issues-mini?step=first`,
+      n,
+      [
+        "Alright, briefly describe the issue you're having with the A T M.",
+        "You can say things like, my card is stuck, the screen is frozen, or I didn't get my money."
+      ]
+    );
   }
 
-  // Normalize transcript text
-  const raw = (event.SpeechResult || '').toString();
-  const text = raw.trim().toLowerCase();
-
-  // --- Step: first (try to classify) ---
   if (step === 'first') {
-    // Decision by simple keyword groups
-    const isCardStuck   = /\b(card|bank card|debit|credit)\b.*\bstuck\b|\bstuck\b.*\bcard\b/.test(text) || /my card is stuck/.test(text);
-    const isFrozen      = /\b(screen|display|touch)\b.*\b(frozen|freez|unresponsive)\b|\b(frozen|freez)\b.*\bscreen\b/.test(text);
-    const isNoCash      = /\b(didn.?t|get|dispense|received?)\b.*\b(cash|money)\b|\bno cash\b|\bno money\b|\bi didn'?t get my money\b/.test(text);
+    const speech = event.SpeechResult || '';
+    const intent = detectIntent(speech);
+    console.log('[issues-mini] speech ->', { speech, intent });
 
-    // card stuck → geo link + auto reboot copy (card retrieval)
-    if (isCardStuck) {
-      await sendGeoLinkSms(context, event.From, GEO_URL);
-      twiml.say({ voice },
-        "Okay, I’m sending you a secure text link to locate the A T M. Please tap the link to share your location, which will enable us to automatically reboot the A T M. Once the power is cut, you’ll be able to retrieve your card. If the A T M doesn’t power off and it's safe to do so, you or someone else can unplug the A T M. If you're still unable to get your card, please call us back and select option 4. A technician will return your call. Thank you for contacting A T M support. Goodbye.");
+    const sms = async (to, body) => {
+      if (!to) return;
+      try {
+        if (MSG_SID) await client.messages.create({ to, messagingServiceSid: MSG_SID, body });
+        else if (SMS_FROM) await client.messages.create({ to, from: SMS_FROM, body });
+        console.log('[issues-mini] SMS sent', { to, body });
+      } catch (e) {
+        console.error('[issues-mini] SMS failed', e);
+      }
+    };
+
+    if (intent === 'card_stuck') {
+      await sms(event.From, `Please click the link to share your ATM location: ${GEO_URL}`);
+      say("Okay, I’m sending you a secure text link to locate the A T M."); pause(1);
+      say("Please tap the link to share your location, which will enable us to automatically reboot the A T M."); pause(1);
+      say("Once the power is cut, you’ll be able to retrieve your card."); pause(1);
+      say("If the A T M doesn’t power off and it's safe to do so, you or someone else can unplug the A T M."); pause(1);
+      say("If you're still unable to get your card, please call us back and select option 4. A technician will return your call."); pause(1);
+      say("Thank you for contacting A T M support. Goodbye.");
       twiml.hangup();
       return callback(null, twiml);
     }
 
-    // screen frozen → geo link + auto reboot copy (reset ATM)
-    if (isFrozen) {
-      await sendGeoLinkSms(context, event.From, GEO_URL);
-      twiml.say({ voice },
-        "Okay, I’m sending you a secure text link to locate the A T M. Please tap the link to share your location, which will enable us to automatically reboot the A T M. This will reset the A T M, and it should be ready for use once it powers back up. This action will also release your card if it’s currently stuck. If the A T M doesn’t power off and it's safe to do so, you or someone else can unplug the A T M. If you're still unable to get your card, please call us back and select option 4. A technician will return your call. Thank you for contacting A T M support. Goodbye.");
+    if (intent === 'screen_frozen') {
+      await sms(event.From, `Please click the link to share your ATM location: ${GEO_URL}`);
+      say("Okay, I’m sending you a secure text link to locate the A T M."); pause(1);
+      say("Please tap the link to share your location, which will enable us to automatically reboot the A T M."); pause(1);
+      say("This will reset the A T M, and it should be ready for use once it powers back up."); pause(1);
+      say("This action will also release your card if it’s currently stuck."); pause(1);
+      say("If the A T M doesn’t power off and it's safe to do so, you or someone else can unplug the A T M."); pause(1);
+      say("If you're still unable to get your card, please call us back and select option 4. A technician will return your call."); pause(1);
+      say("Thank you for contacting A T M support. Goodbye.");
       twiml.hangup();
       return callback(null, twiml);
     }
 
-    // didn't get my money → send claim link
-    if (isNoCash) {
-      await sendClaimSms(context, event.From, CLAIM_LINK);
-      twiml.say({ voice },
-        "I've sent you a text message with a link to the claim form. Please fill it out and our team will follow up. Thanks for calling A T M support. Goodbye.");
+    if (intent === 'no_cash') {
+      await sms(event.From, `Claim form link: ${CLAIM_LINK}`);
+      say("I've sent you a text message with a link to the claim form."); pause(1);
+      say("Please fill it out and our team will follow up."); pause(1);
+      say("Thanks for calling A T M support. Goodbye.");
       twiml.hangup();
       return callback(null, twiml);
     }
 
-    // Unknown → ask again (second chance)
-    const g = twiml.gather({
-      method: 'POST',
-      input: 'speech',
-      timeout: 7,
-      speechTimeout: 'auto',
-      action: `${base}/issues-mini?step=second`,
-      actionOnEmptyResult: true
-    });
-    g.say({ voice, language: 'en-US' }, "Sorry, can you say that again?");
-    if (!goodbyeOrNudge(`${base}/issues-mini?step=first`)) {}
+    const nudges = Number(event.n || 0);
+    if (nudges < NUDGE_MAX) {
+      return withNudge(
+        `${baseUrl}/issues-mini?step=first`,
+        nudges,
+        [ "Sorry, can you say that again?" ]
+      );
+    }
+    say("I’m having trouble understanding. I’ll have a technician call you back shortly.");
+    twiml.redirect({ method: 'POST' }, '/tech-callback?step=start&reason=issues_unknown');
     return callback(null, twiml);
   }
 
-  // --- Step: second (fallback to tech callback if still unknown) ---
-  if (step === 'second') {
-    const txt = text;
-    const isCardStuck2 = /\bcard\b.*\bstuck\b|\bstuck\b.*\bcard\b/.test(txt);
-    const isFrozen2    = /\bscreen\b.*\b(frozen|freez)\b|\b(frozen|freez)\b.*\bscreen\b/.test(txt);
-    const isNoCash2    = /\bdidn.?t get (my )?money\b|\bno cash\b|\bno money\b/.test(txt);
-
-    if (isCardStuck2 || isFrozen2 || isNoCash2) {
-      // loop back to first so we reuse the same branching & SMS logic
-      twiml.redirect({ method: 'POST' }, `${base}/issues-mini?step=first&SpeechResult=${encodeURIComponent(raw)}`);
-      return callback(null, twiml);
-    }
-
-    twiml.say({ voice }, "I’m having trouble understanding. I’ll have a technician call you back shortly.");
-    twiml.redirect({ method: 'POST' }, `${base}/tech-callback?step=start&reason=issues_unknown`);
-    return callback(null, twiml);
-  }
-
-  // default
-  twiml.redirect({ method: 'POST' }, `${base}/issues-mini?step=start`);
-  return callback(null, twiml);
+  // default restart
+  return withNudge(
+    `${baseUrl}/issues-mini?step=first`,
+    n,
+    [
+      "Alright, briefly describe the issue you're having with the A T M.",
+      "You can say things like, my card is stuck, the screen is frozen, or I didn't get my money."
+    ]
+  );
 };
+1759687063
 
-// --- SMS helpers ---
-async function sendGeoLinkSms(context, to, url) {
-  if (!to) return;
-  const client = require('twilio')(context.ACCOUNT_SID, context.AUTH_TOKEN);
-  const body = "Please click the link to share your ATM location: " + url;
-  const msg = { body, to };
-  if (context.MESSAGING_SERVICE_SID) msg.messagingServiceSid = context.MESSAGING_SERVICE_SID;
-  else if (context.SMS_FROM) msg.from = context.SMS_FROM;
-  try { await client.messages.create(msg); } catch (_) {}
-}
-
-async function sendClaimSms(context, to, url) {
-  if (!to) return;
-  const client = require('twilio')(context.ACCOUNT_SID, context.AUTH_TOKEN);
-  const body = "Claim form link: " + url;
-  const msg = { body, to };
-  if (context.MESSAGING_SERVICE_SID) msg.messagingServiceSid = context.MESSAGING_SERVICE_SID;
-  else if (context.SMS_FROM) msg.from = context.SMS_FROM;
-  try { await client.messages.create(msg); } catch (_) {}
-}
+// touch 1759687475
