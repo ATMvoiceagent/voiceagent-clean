@@ -1,20 +1,8 @@
 {
-  "name": "voiceagent-clean",
-  "version": "0.0.0",
+  "name": "citvan-clean",
   "private": true,
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "twilio-run",
-    "deploy": "twilio-run deploy"
-  },
+  "version": "1.0.0",
   "dependencies": {
-    "twilio": "5.0.3",
-    "@twilio/runtime-handler": "2.0.3"
-  },
-  "devDependencies": {
-    "twilio-run": "^4.2.0"
-  },
-  "engines": {
-    "node": "22"
+    "@sendgrid/mail": "^8.1.0"
   }
 }
