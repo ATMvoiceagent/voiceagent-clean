@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ATM Claim Form</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 24px; line-height: 1.45; }
+    .box { max-width: 720px; margin: auto; border: 1px solid #ddd; padding: 16px; border-radius: 12px; }
+    h1 { margin: 0 0 12px 0; font-size: 22px; }
+    label { display:block; margin-top:12px; font-weight:600; }
+    input, textarea { width: 100%; padding: 10px; border:1px solid #ccc; border-radius:8px; margin-top:6px; }
+    button { margin-top:16px; padding:10px 14px; background:#0a7; color:#fff; border:0; border-radius:8px; cursor:pointer; }
+    .muted { color:#555; }
+    .hint { font-size: 13px; color:#555; margin-top:4px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>ATM Claim — Didn’t get cash</h1>
+    <p class="muted">Fill this out and (optionally) attach a photo of the receipt.</p>
+
+    <form id="claimForm" method="post" action="/claim-submit-v2">
+      <label>Full name
+        <input name="name" required />
+      </label>
+
+      <label>Mobile phone
+        <input name="phone" type="tel" required />
+      </label>
+
+      <label>Email
+        <input name="email" type="email" required />
+      </label>
+
+      <label>Terminal / Location ID
+        <input name="terminal" placeholder="e.g. CIT00173" required />
+      </label>
+
+      <label>Date & time of transaction
+        <input name="datetime" type="datetime-local" required />
+      </label>
+
+      <label>Amount ($)
+        <input name="amount" type="number" step="0.01" required />
+      </label>
+
+      <label>What happened?
+        <textarea name="desc" rows="4" placeholder="Briefly describe the issue" required></textarea>
+      </label>
+
+      <label>Attach receipt (image or PDF)
+        <input id="receipt" type="file" accept="image/*,application/pdf" />
+        <div class="hint">Max ~5 MB recommended.</div>
+      </label>
+
+      <!-- Hidden fields where we’ll stash Base64 + metadata -->
+      <input type="hidden" name="receipt_b64" id="receipt_b64" />
+      <input type="hidden" name="receipt_name" id="receipt_name" />
+      <input type="hidden" name="receipt_type" id="receipt_type" />
+
+      <button type="submit">Submit claim</button>
+    </form>
+
+    <p id="status" class="hint" style="margin-top:8px;"></p>
+  </div>
+
+  <script>
+    const form = document.getElementById('claimForm');
+    const fileInput = document.getElementById('receipt');
+    const statusEl = document.getElementById('status');
+
+    form.addEventListener('submit', async (e) => {
+      if (!fileInput.files || fileInput.files.length === 0) return; // no file — submit normally
+
+      e.preventDefault();
+      const file = fileInput.files[0];
+      if (!file) { form.submit(); return; }
+
+      statusEl.textContent = 'Attaching receipt…';
+      try {
+        const b64 = await fileToBase64(file); // "data:TYPE;base64,AAAA"
+        const comma = b64.indexOf(',');
+        const payload = (comma >= 0) ? b64.slice(comma + 1) : b64;
+
+        document.getElementById('receipt_b64').value = payload;
+        document.getElementById('receipt_name').value = file.name || 'receipt';
+        document.getElementById('receipt_type').value = file.type || 'application/octet-stream';
+      } catch (err) {
+        statusEl.textContent = 'Could not attach receipt, submitting without attachment.';
+      }
+      form.submit();
+    });
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+  </script>
+</body>
+</html>

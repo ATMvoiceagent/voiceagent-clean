@@ -20,3 +20,17 @@ package-lock.json
 
 # If you’ve exported old backups
 *_trash/
+# Node / editor
+node_modules/
+*.log
+.DS_Store
+
+# Twilio serverless build artifacts
+.twiliodeployinfo
+.twilio-functions
+.twilio-run
+
+# Local env files (DO NOT COMMIT SECRETS)
+.env
+.env.*
+.twilio-env.json
