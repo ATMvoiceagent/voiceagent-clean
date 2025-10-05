@@ -4,5 +4,10 @@
   "version": "1.0.0",
   "dependencies": {
     "@sendgrid/mail": "^8.1.0"
+  },
+  "scripts": {
+    "deploy": "twilio serverless:deploy --service-sid ZScd92c9d2783301613f07144d0ed947b1 --environment ui",
+    "logs": "twilio serverless:logs --service-sid ZScd92c9d2783301613f07144d0ed947b1 --environment ui --tail",
+    "smoke": "bash ./scripts/smoke.sh"
   }
 }
