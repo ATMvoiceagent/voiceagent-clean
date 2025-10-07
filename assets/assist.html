@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ATM Assist</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 20px; line-height: 1.4; }
+    .card { max-width: 520px; margin: 0 auto; padding: 18px; border: 1px solid #ddd; border-radius: 12px; }
+    .muted { color: #666; font-size: 0.95rem; }
+    .ok { color: #0a7f2e; }
+    .err { color: #b00020; }
+    button { padding: 10px 14px; border-radius: 8px; border: 1px solid #222; background: #fff; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>ATM Assist</h2>
+    <p id="msg" class="muted">If prompted, please allow location access.</p>
+    <div id="result"></div>
+    <p class="muted" id="foot"></p>
+    <button id="retry" style="display:none">Retry</button>
+  </div>
+
+<script>
+(function () {
+  const qs = new URLSearchParams(location.search);
+  const action = (qs.get('action') || '').toLowerCase();
+  const msg = (t, cls='muted') => { const el = document.getElementById('msg'); el.textContent = t; el.className = cls; };
+
+  async function postJSON(path, payload) {
+    const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    try { return await r.json(); } catch { return { ok:false }; }
+  }
+
+  async function sendReboot() {
+    msg('Obtaining your location…');
+    if (!('geolocation' in navigator)) {
+      msg('Location is not available on this device.', 'err'); return;
+    }
+    navigator.geolocation.getCurrentPosition(async (pos)=>{
+      msg('Submitting reboot request…');
+      const body = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      const res = await postJSON('/geo-reboot', body);
+      if (res && res.ok) {
+        msg('Thanks! We’re processing the reboot now. A technician will call you back shortly.', 'ok');
+        document.getElementById('foot').textContent = `Nearest device selected (ID ${res.deviceId}). You can close this page.`;
+      } else {
+        msg('Sorry, we could not submit the reboot automatically. Please call us back and select option 4.', 'err');
+        document.getElementById('retry').style.display = 'inline-block';
+      }
+    }, (err)=>{
+      msg('We couldn’t get your location. Please allow location access, then tap Retry, or call us back (option 4).', 'err');
+      document.getElementById('retry').style.display = 'inline-block';
+    }, { enableHighAccuracy:true, timeout:10000, maximumAge:0 });
+  }
+
+  document.getElementById('retry').addEventListener('click', sendReboot);
+
+  if (action === 'reboot') {
+    // auto-start flow
+    sendReboot();
+  } else {
+    msg('This page is ready. If you were asked to share your location, please press Continue.');
+    const btn = document.getElementById('retry'); btn.textContent = 'Continue'; btn.style.display = 'inline-block';
+  }
+})();
+</script>
+</body>
+</html>

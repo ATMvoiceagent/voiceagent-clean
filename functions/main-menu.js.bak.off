@@ -1,0 +1,96 @@
+exports.handler = async function handler(context, event, callback) {
+  const twiml = new Twilio.twiml.VoiceResponse();
+const _recStart = twiml.start();  _recStart.record({    recordingTrack: 'both',    trim: 'do-not-trim',    recordingStatusCallback: '/recording-status',    recordingStatusCallbackMethod: 'POST'  });
+  const voice = 'Polly.Joanna-Neural';
+  const lang  = 'en-US';
+
+  const say = (t) => twiml.say({ voice, language: lang }, t);
+  const redirectPost = (p) => twiml.redirect({ method: 'POST' }, p);
+
+  const step = (event.step || 'menu').toLowerCase();
+  const n    = parseInt(event.n || '0', 10) || 0;
+
+  // helpers
+  const gather = (opts, next) =>
+    twiml.gather({ method: 'POST', timeout: 7, ...opts, action: `/main-menu?${next}` });
+
+  const goodbye = () => { say('Okay, call us back if you still need assistance. Goodbye.'); twiml.hangup(); };
+
+  const nudgeAndGoodbye = (next) => {
+    say('Are you still there?');
+    const g = twiml.gather({ method: 'POST', timeout: 5, input: 'dtmf speech', numDigits: 1, speechTimeout: 'auto', action: `/main-menu?${next}` });
+    g.say({ voice, language: lang }, 'Please make your selection now.');
+    // If still nothing after nudge → goodbye
+    redirectPost('/main-menu?step=bye');
+  };
+
+  if (step === 'bye') { goodbye(); return callback(null, twiml); }
+
+  if (step === 'menu') {
+    const g = gather({ input: 'speech dtmf', numDigits: 1, speechTimeout: 'auto' }, 'step=choice');
+    g.say(
+      { voice, language: lang },
+      "Thank you for contacting ATM Support. If you have questions about pricing and product information, or you're looking to purchase or place an A T M, press 1. " +
+      "If you have an error code on your A T M screen, press 2. " +
+      "If you're experiencing an issue such as a stuck card or not receiving cash, press 3. " +
+      "Or to have a technician call you back, press 4. Please make your selection now. You can press 0 at any time to start over."
+    );
+    if (n === 0) {
+      // first time through; set up nudge path back to choice
+      redirectPost('/main-menu?step=nudge&n=1');
+    } else {
+      // already nudged once; next silence will hang up
+      redirectPost('/main-menu?step=bye');
+    }
+    return callback(null, twiml);
+  }
+
+  if (step === 'nudge') {
+    nudgeAndGoodbye('step=choice');
+    return callback(null, twiml);
+  }
+
+  if (step === 'choice') {
+    const d = (event.Digits || '').trim();
+    const speech = (event.SpeechResult || '').toLowerCase();
+
+    // 0 = start over
+    if (d === '0' || /start over|main menu/.test(speech)) {
+      redirectPost('/main-menu?step=menu&n=0');
+      return callback(null, twiml);
+    }
+
+    // 1 = Sales
+    if (d === '1' || /sales-mini?step=start|one|1/.test(speech)) {
+      redirectPost('/sales-mini?step=start');
+      return callback(null, twiml);
+    }
+
+    // 2 = Error codes
+    if (d === '2' || /error code|two|2/.test(speech)) {
+      redirectPost('/atm-error-lookup?step=collect');
+      return callback(null, twiml);
+    }
+
+    // 3 = Issues (Option 3)  ← NEW/IMPORTANT
+    if (d === '3' || /issue|three|3/.test(speech)) {
+      // jump into the issues flow we added
+      twiml.redirect({ method: 'POST' }, '/issues-mini?step=collect');
+      return callback(null, twiml);
+    }
+
+    // 4 = Tech callback
+    if (d === '4' || /tech|four|4|callback/.test(speech)) {
+      redirectPost('/tech-callback?step=start');
+      return callback(null, twiml);
+    }
+
+    // Unrecognized → read menu again (without resetting n)
+    redirectPost(`/main-menu?step=menu&n=${n}`);
+    return callback(null, twiml);
+  }
+
+  // Fallback
+  redirectPost('/main-menu?step=menu&n=0');
+  return callback(null, twiml);
+};

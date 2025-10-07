@@ -1,20 +1,13 @@
 {
-  "name": "voiceagent-clean",
-  "version": "0.0.0",
+  "name": "citvan-clean",
   "private": true,
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "twilio-run",
-    "deploy": "twilio-run deploy"
-  },
+  "version": "1.0.0",
   "dependencies": {
-    "twilio": "5.0.3",
-    "@twilio/runtime-handler": "2.0.3"
+    "@sendgrid/mail": "^8.1.0"
   },
-  "devDependencies": {
-    "twilio-run": "^4.2.0"
-  },
-  "engines": {
-    "node": "22"
+  "scripts": {
+    "deploy": "twilio serverless:deploy --service-sid ZScd92c9d2783301613f07144d0ed947b1 --environment ui",
+    "logs": "twilio serverless:logs --service-sid ZScd92c9d2783301613f07144d0ed947b1 --environment ui --tail",
+    "smoke": "bash ./scripts/smoke.sh"
   }
 }
