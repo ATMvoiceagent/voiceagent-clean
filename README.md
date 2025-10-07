@@ -102,3 +102,35 @@ Copy code
 ## Notes
 - If you see “application error” on voice: tail logs with `npm run logs`.
 - If email bounces, prefer SMTP relay from your provider (no SDK required) or fix DMARC/DNS first.
+
+## Release & Verify (Production)
+
+**Live env:** `ui-environment` → `https://citvan-clean-6447-ui.twil.io`  
+**Service SID:** `ZScd92c9d2783301613f07144d0ed947b1`  
+**Env SID:** `ZE400015407fe6344ee2b7603817c43ca9`
+
+### One-liner release (deploy + attach + tag + verify)
+```bash
+./scripts/release.sh
+Creates a new Twilio build, attaches it to ui-environment, creates a git tag: release-YYYYMMDD-HHMMSS-<ZB…>, and verifies the active build + a smoke test.
+
+Manual verify
+bash
+Copy code
+./scripts/verify.sh
+Prints the active Build SID, and runs quick TwiML checks (main menu + issues → card stuck).
+
+Branching policy
+Work in feature branches (e.g., work/copy-tweaks-and-error-codes)
+
+Open PR → Squash & merge into main
+
+main is protected; releases come from main using ./scripts/release.sh
+
+Important URLs
+Main menu (POST): https://citvan-clean-6447-ui.twil.io/main-menu?step=menu
+
+Issues (POST): https://citvan-clean-6447-ui.twil.io/issues
+
+Scripts reference: https://citvan-clean-6447-ui.twil.io/ivr-scripts.md
+
