@@ -1,225 +1,137 @@
-exports.handler = async (context, event, callback) => {
-  const { twiml: { VoiceResponse } } = require('twilio');
+// /sales.js - Option 1 (Sales): website SMS or speak with Jeff
+// Update: speak "Okay, let me transfer you to Jeff now." before dialing sales.
+// Uses only SALES_NUMBER; Dial callerId uses CALLER_ID.
+
+exports.handler = async function (context, event, callback) {
+  const VoiceResponse = Twilio.twiml.VoiceResponse;
+
+  // --- ENV
+  const SMS_FROM     = context.SMS_FROM || context.CALLER_ID || '';
+  const WEBSITE_URL  = context.WEBSITE_URL || 'https://cashintime.ca';
+  const CALLER_ID    = context.CALLER_ID || '';
+  const SALES_NUMBER = context.SALES_NUMBER || '';
+
+  // --- INPUTS
+  const step   = (event.step || 'choice').toString();
+  const from   = normalizeE164(event.From || event.from || '');
+  const digits = (event.Digits || '').toString().trim();
+  const n      = parseInt(event.n || '0', 10) || 0;
+
+  // --- HELPERS
+  function baseUrl(ctx) {
+    const host = ctx.DOMAIN_NAME || ctx.DOMAIN || 'citvan-clean-6447-ui.twil.io';
+    return `https://${host}`;
+  }
+  function absUrl(ctx, path, qs = {}) {
+    const url = new URL(baseUrl(ctx) + path);
+    for (const [k, v] of Object.entries(qs)) url.searchParams.set(k, v);
+    return url.toString();
+  }
+  function last4(num) {
+    const d = (num || '').replace(/\D/g, '');
+    return d.slice(-4) || 'XXXX';
+  }
+  function normalizeE164(num) {
+    if (!num) return '';
+    let d = num.toString().replace(/\D/g, '');
+    if (d.length === 10) d = '1' + d;
+    if (!d.startsWith('1')) return '';
+    return '+' + d;
+  }
+  function say(r, text) { r.say({ voice: 'Polly.Joanna-Neural' }, text); }
+  function log(tag, obj) { try { console.log(`[sales] ${JSON.stringify({ step, tag, ...obj })}`); } catch {} }
+  async function safeSms(client, to, body) {
+    try {
+      const msg = await client.messages.create({ from: SMS_FROM, to, body });
+      log('sms', { action: 'sent', to, from_used: SMS_FROM, sid: msg.sid });
+    } catch (e) {
+      log('sms', { action: 'error', to, from_used: SMS_FROM, code: e?.code, message: e?.message });
+    }
+  }
+  function nudgeOrBye(r, reprompt, nextUrl) {
+    if (n >= 1) { say(r, "No problem. Call us back if you need anything. Goodbye."); r.hangup(); return true; }
+    const g = r.gather({ input: 'dtmf', numDigits: 1, timeout: 5, action: nextUrl + `&n=${n + 1}`, method: 'POST' });
+    say(g, reprompt);
+    return false;
+  }
+
+  // --- START
   const twiml = new VoiceResponse();
-  const voice = context.POLLY_VOICE || 'Polly.Joanna-Neural';
+  log('request', { Digits: digits, From: from, SALES_NUMBER: SALES_NUMBER ? 'set' : 'missing' });
 
-  // dynamic base url
-  const hdrs  = event.headers || {};
-  const proto = hdrs['x-forwarded-proto'] || hdrs['X-Forwarded-Proto'] || 'https';
-  const host  = hdrs.host || hdrs.Host || (context.DOMAIN_NAME || '').replace(/^https?:\/\//,'');
-  const base  = `${proto}://${host}`;
-
-  const log = (msg, extra={}) => console.log('[sales]', msg, extra);
-  const goodbye = () => {
-    twiml.say({ voice }, 'Okay, call us back if you would like more information. Goodbye.');
-    twiml.hangup();
-    return callback(null, twiml);
-  };
-
-  const sendSiteLink = async (to) => {
-    if (!to) return;
-    const client = require('twilio')(context.ACCOUNT_SID, context.AUTH_TOKEN);
-    const url = context.WEBSITE_URL || 'https://cashintime.ca';
-    const msg = { to, body: `Product info: ${url}` };
-    if (context.MESSAGING_SERVICE_SID) msg.messagingServiceSid = context.MESSAGING_SERVICE_SID;
-    else if (context.SMS_FROM) msg.from = context.SMS_FROM;
-    try { await client.messages.create(msg); } catch (e) {}
-  };
-
-  const callJeff = () => {
-    const dial = twiml.dial({ timeout: 25, callerId: context.CALLER_ID || event.From || undefined });
-    dial.number('+16043295286'); // Jeff
-    return callback(null, twiml);
-  };
-
-  const step = event.step || 'menu';
-  const homeUrl = event.homeUrl || '/main-menu';
-
-  // ---------- MENU ----------
-  if (step === 'menu') {
-    log('menu', { from: event.From || '', digits: String(event.Digits||'') });
-    const g = twiml.gather({
-      method: 'POST', input: 'dtmf speech', numDigits: 1, timeout: 7, speechTimeout: 'auto',
-      action: `${base}/sales?step=choice&homeUrl=${encodeURIComponent(homeUrl)}`,
-      actionOnEmptyResult: true
-    });
-    g.say({ voice, language: 'en-US' },
-      'To receive a text link to our website for product information, press 1. To speak with Jeff in sales, press 2.'
-    );
-    // one nudge then timeout (no actionOnEmptyResult in n1)
-    twiml.redirect({ method: 'POST' }, `${base}/sales?step=menu_n1&homeUrl=${encodeURIComponent(homeUrl)}`);
-    return callback(null, twiml);
-  }
-
-  if (step === 'menu_n1') {
-    const g = twiml.gather({
-      method:'POST', input:'dtmf speech', numDigits:1, timeout:6, speechTimeout:'auto',
-      action:`${base}/sales?step=menu_timeout&homeUrl=${encodeURIComponent(homeUrl)}`
-    });
-    g.say({ voice }, 'Please make a selection now.');
-    // if still no input, Twilio will hit Redirect below
-    twiml.redirect({ method:'POST' }, `${base}/sales?step=menu_timeout&homeUrl=${encodeURIComponent(homeUrl)}`);
-    return callback(null, twiml);
-  }
-
-  if (step === 'menu_timeout') return goodbye();
-
-  // ---------- CHOICE ----------
   if (step === 'choice') {
-    const d = String(event.Digits || '').trim();
-    log('choice', { from: event.From || '', digits: d });
-
-    if (d === '1') {
-      const from = event.From || '';
-      const last4 = (from.match(/\d/g) || []).slice(-4).join('');
-      const g = twiml.gather({
-        method:'POST', input:'dtmf speech', numDigits:1, timeout:7, speechTimeout:'auto',
-        action:`${base}/sales?step=sms_confirm&from=${encodeURIComponent(from)}&homeUrl=${encodeURIComponent(homeUrl)}`,
-        actionOnEmptyResult: true
-      });
-      g.say({ voice }, `Please confirm the mobile number to receive the text. Press 1 to use your number ending in ${last4}, or press 2 to enter a new 10 digit mobile number.`);
-      twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_confirm_n1&from=${encodeURIComponent(from)}&homeUrl=${encodeURIComponent(homeUrl)}`);
-      return callback(null, twiml);
-    }
-
-    if (d === '2') return callJeff();
-
-    // invalid → single nudge, then goodbye
-    const g = twiml.gather({
-      method:'POST', input:'dtmf speech', numDigits:1, timeout:6, speechTimeout:'auto',
-      action:`${base}/sales?step=choice_timeout&homeUrl=${encodeURIComponent(homeUrl)}`
-    });
-    g.say({ voice }, 'Sorry, I didn’t get that. Please press 1 for a text link or 2 to speak with sales.');
-    twiml.redirect({ method:'POST' }, `${base}/sales?step=choice_timeout&homeUrl=${encodeURIComponent(homeUrl)}`);
+    const next = absUrl(context, '/sales', { step: 'choice_handle', from });
+    const g = twiml.gather({ input: 'dtmf', numDigits: 1, timeout: 6, action: next, method: 'POST' });
+    say(g, "To receive a text link to our website for product information, press 1. To speak with Jeff in sales, press 2.");
     return callback(null, twiml);
   }
 
-  if (step === 'choice_timeout') return goodbye();
-
-  // ---------- SMS CONFIRM ----------
-  if (step === 'sms_confirm') {
-    const d = String(event.Digits || '').trim();
-    const from = event.from || event.From || '';
-    log('sms_confirm', { from, digits: d, stage: 'main' });
-
-    if (!d) {
-      // no input → go to n1
-      twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_confirm_n1&from=${encodeURIComponent(from)}&homeUrl=${encodeURIComponent(homeUrl)}`);
+  if (step === 'choice_handle') {
+    if (digits === '1') {
+      const url = absUrl(context, '/sales', { step: 'confirm', from });
+      const g = twiml.gather({ input: 'dtmf', numDigits: 1, timeout: 6, action: url, method: 'POST' });
+      say(g, `Please confirm the mobile number to receive the text. Press 1 to use your number ending in ${last4(from)}, or press 2 to enter a new 10-digit mobile number.`);
+      return callback(null, twiml);
+    } else if (digits === '2') {
+      if (SALES_NUMBER) {
+        log('decision', { route: 'dial_sales', to: SALES_NUMBER, callerId_used: CALLER_ID || from || undefined });
+        // NEW: say before transfer
+        say(twiml, "Okay, let me transfer you to Jeff now.");
+        const d = twiml.dial({ callerId: CALLER_ID || from || undefined, timeout: 20 });
+        d.number(SALES_NUMBER);
+        return callback(null, twiml);
+      }
+      log('decision', { route: 'sales_number_missing' });
+      say(twiml, "Sorry, connecting you to sales is not configured yet. Please call us back if you need anything. Goodbye.");
+      twiml.hangup();
+      return callback(null, twiml);
+    } else {
+      const next = absUrl(context, '/sales', { step: 'choice_handle', from });
+      if (nudgeOrBye(twiml, "To receive a text link, press 1. To speak with Jeff in sales, press 2.", next)) return callback(null, twiml);
       return callback(null, twiml);
     }
+  }
 
-    if (d === '2') {
-      const g = twiml.gather({
-        method:'POST', input:'dtmf', numDigits:10, timeout:8,
-        action:`${base}/sales?step=sms_set&homeUrl=${encodeURIComponent(homeUrl)}`
-      });
-      g.say({ voice }, 'Please enter the 10 digit mobile number.');
-      twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_set_n1&homeUrl=${encodeURIComponent(homeUrl)}`);
+  if (step === 'confirm') {
+    if (digits === '1') {
+      const client = context.getTwilioClient();
+      const to = from;
+      const body = `Here is the link ${WEBSITE_URL} to the Cash In Time website you requested.`;
+      log('decision', { sms_to: to, via: 'caller' });
+      await safeSms(client, to, body);
+      say(twiml, "Okay, I've sent you the link by text. Please take a moment to explore our website. If you have any questions, feel free to call us back, and you can speak directly with Jeff. Thanks for calling ATM support. Goodbye.");
+      twiml.hangup();
+      return callback(null, twiml);
+    } else if (digits === '2') {
+      const url = absUrl(context, '/sales', { step: 'collect_new', from });
+      const g = twiml.gather({ input: 'dtmf', numDigits: 10, timeout: 12, action: url, method: 'POST' });
+      say(g, "Please enter the 10-digit mobile number now.");
+      return callback(null, twiml);
+    } else {
+      const next = absUrl(context, '/sales', { step: 'confirm', from });
+      if (nudgeOrBye(twiml, `Please confirm the mobile number to receive the text. Press 1 to use your number ending in ${last4(from)}, or press 2 to enter a new 10-digit mobile number.`, next)) return callback(null, twiml);
       return callback(null, twiml);
     }
+  }
 
-    // default: use the caller's number
-    await sendSiteLink(from);
-    log('sms sent', { to: from });
-    twiml.say({ voice }, 'I have sent you the link via text. Thanks for contacting A T M support. Goodbye.');
+  if (step === 'collect_new') {
+    const entered = (event.Digits || '').replace(/\D/g, '');
+    const to = normalizeE164(entered);
+    if (!entered || entered.length !== 10 || !to) {
+      const next = absUrl(context, '/sales', { step: 'collect_new', from });
+      if (nudgeOrBye(twiml, "That didn't look like 10 digits. Please enter the 10-digit mobile number now.", next)) return callback(null, twiml);
+      return callback(null, twiml);
+    }
+    const client = context.getTwilioClient();
+    const body = `Here is the link ${WEBSITE_URL} to the Cash In Time website you requested.`;
+    log('decision', { sms_to: to, via: 'entered' });
+    await safeSms(client, to, body);
+    say(twiml, "Okay, I've sent you the link by text. Please take a moment to explore our website. If you have any questions, feel free to call us back, and you can speak directly with Jeff. Thanks for calling ATM support. Goodbye.");
     twiml.hangup();
     return callback(null, twiml);
   }
 
-  if (step === 'sms_confirm_n1') {
-    const from = event.from || event.From || '';
-    const g = twiml.gather({
-      method:'POST', input:'dtmf speech', numDigits:1, timeout:6, speechTimeout:'auto',
-      action:`${base}/sales?step=sms_confirm_timeout&from=${encodeURIComponent(from)}&homeUrl=${encodeURIComponent(homeUrl)}`
-    });
-    g.say({ voice }, 'Please choose now.');
-    twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_confirm_timeout&from=${encodeURIComponent(from)}&homeUrl=${encodeURIComponent(homeUrl)}`);
-    return callback(null, twiml);
-  }
-
-  if (step === 'sms_confirm_timeout') return goodbye();
-
-  // ---------- SMS CHOICE (legacy) ----------
-  if (step === 'sms_choice') {
-    const d = String(event.Digits || '').trim();
-    const from = event.from || event.From || '';
-    log('sms_choice', { from, digits: d, stage: 'main' });
-
-    if (!d) {
-      twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_choice_n1&from=${encodeURIComponent(from)}&homeUrl=${encodeURIComponent(homeUrl)}`);
-      return callback(null, twiml);
-    }
-
-    if (d === '2') {
-      const g = twiml.gather({
-        method:'POST', input:'dtmf', numDigits:10, timeout:8,
-        action:`${base}/sales?step=sms_set&homeUrl=${encodeURIComponent(homeUrl)}`
-      });
-      g.say({ voice }, 'Please enter the 10 digit mobile number.');
-      twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_set_n1&homeUrl=${encodeURIComponent(homeUrl)}`);
-      return callback(null, twiml);
-    }
-
-    await sendSiteLink(from);
-    log('sms sent', { to: from });
-    twiml.say({ voice }, 'I have sent you the link via text. Thanks for contacting A T M support. Goodbye.');
-    twiml.hangup();
-    return callback(null, twiml);
-  }
-
-  if (step === 'sms_choice_n1') {
-    const from = event.from || event.From || '';
-    const g = twiml.gather({
-      method:'POST', input:'dtmf speech', numDigits:1, timeout:6, speechTimeout:'auto',
-      action:`${base}/sales?step=sms_choice_timeout&from=${encodeURIComponent(from)}&homeUrl=${encodeURIComponent(homeUrl)}`
-    });
-    g.say({ voice }, 'Please choose now.');
-    twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_choice_timeout&from=${encodeURIComponent(from)}&homeUrl=${encodeURIComponent(homeUrl)}`);
-    return callback(null, twiml);
-  }
-
-  if (step === 'sms_choice_timeout') return goodbye();
-
-  // ---------- SMS SET (enter 10 digits) ----------
-  if (step === 'sms_set') {
-    const digits = String(event.Digits || '').replace(/\D/g,'');
-    log('sms_set', { digits, stage: 'main' });
-
-    if (!digits) {
-      twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_set_n1&homeUrl=${encodeURIComponent(homeUrl)}`);
-      return callback(null, twiml);
-    }
-
-    if (digits.length !== 10) {
-      const g = twiml.gather({
-        method:'POST', input:'dtmf', numDigits:10, timeout:8,
-        action:`${base}/sales?step=sms_set&homeUrl=${encodeURIComponent(homeUrl)}`
-      });
-      g.say({ voice }, 'Please enter the 10 digit mobile number.');
-      twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_set_n1&homeUrl=${encodeURIComponent(homeUrl)}`);
-      return callback(null, twiml);
-    }
-
-    await sendSiteLink(`+1${digits}`);
-    log('sms sent', { to: `+1${digits}` });
-    twiml.say({ voice }, 'I have sent you the link via text. Thanks for contacting A T M support. Goodbye.');
-    twiml.hangup();
-    return callback(null, twiml);
-  }
-
-  if (step === 'sms_set_n1') {
-    const g = twiml.gather({
-      method:'POST', input:'dtmf', numDigits:10, timeout:6,
-      action:`${base}/sales?step=sms_set_timeout&homeUrl=${encodeURIComponent(homeUrl)}`
-    });
-    g.say({ voice }, 'Please enter the 10 digit mobile number now.');
-    twiml.redirect({ method:'POST' }, `${base}/sales?step=sms_set_timeout&homeUrl=${encodeURIComponent(homeUrl)}`);
-    return callback(null, twiml);
-  }
-
-  if (step === 'sms_set_timeout') return goodbye();
-
-  // fallback
-  twiml.redirect({ method:'POST' }, `${base}/sales?step=menu&homeUrl=${encodeURIComponent(homeUrl)}`);
+  const redirectUrl = absUrl(context, '/sales', { step: 'choice', from });
+  twiml.redirect(redirectUrl);
   return callback(null, twiml);
 };
