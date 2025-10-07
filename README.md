@@ -2,16 +2,14 @@
 
 Production IVR for ATM Support (Voice + SMS). This README is the **quick start** and day-to-day runbook. Deep details live in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
----
-
 ## Quick Start
 ```bash
 # prerequisites
 node -v                     # 18+ (22 OK)
 twilio -v                   # Twilio CLI + serverless plugin
-twilio profiles:use         # ensure you're on the correct account
+twilio profiles:use         # ensure the correct account
 
-# smoke locally against live env
+# smoke against live env
 HOST="https://citvan-clean-6447-ui.twil.io"
 curl -sS -X POST "$HOST/main-menu?step=menu" | xmllint --format -
 Environments
@@ -27,13 +25,13 @@ Release (Deploy + Attach + Tag + Verify)
 bash
 Copy code
 ./scripts/release.sh
-Builds a new Twilio ZB… build, attaches to ui-environment, creates tag release-YYYYMMDD-HHMMSS-<ZB…>, verifies live build and a smoke test.
+Builds a new Twilio ZB… build, attaches to ui-environment, creates a tag release-YYYYMMDD-HHMMSS-<ZB…>, verifies live build and a smoke test.
 
 Verify Anytime
 bash
 Copy code
 ./scripts/verify.sh
-Outputs live Build SID and spot-checks TwiML.
+Prints live Build SID and spot-checks TwiML.
 
 Rollback
 Choose a previous release-* tag → git checkout <tag> → optional patch → ./scripts/release.sh.
@@ -48,5 +46,4 @@ IVR Scripts (canonical): https://citvan-clean-6447-ui.twil.io/ivr-scripts.md
 Contributing
 Branch from main → PR → Squash & merge.
 
-main is protected; all releases come from main.
-
+main is protected; releases come from main.
