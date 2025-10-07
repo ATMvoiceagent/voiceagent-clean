@@ -1,136 +1,52 @@
-# VoiceAgent (citvan-clean) — Runbook
+# ATM VoiceAgent (Twilio Serverless)
 
-Production service on Twilio Functions (Node 22).
+Production IVR for ATM Support (Voice + SMS). This README is the **quick start** and day-to-day runbook. Deep details live in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
-## Overview
-- **Service SID:** ZScd92c9d2783301613f07144d0ed947b1
-- **Environment SID (ui):** ZE400015407fe6344ee2b7603817c43ca9
-- **Domain:** https://citvan-clean-6447-ui.twil.io
-- Functions: `/main-menu`, `/sales`, `/atm-error-lookup`, `/issues-mini`, `/tech-callback`, helpers (`/assist-submit`, `/geo-reboot`, …)
-- Assets: `assist.html`, `claim.html`, private JSON maps
+---
 
-## Prerequisites
-- Twilio CLI (logged in)
-- Access to the project with the SIDs above
-- Node 18+ (local dev), git, curl, xmllint (optional for pretty TwiML)
-- GitHub remote: `git@github.com:ATMvoiceagent/voiceagent-clean.git`
+## Quick Start
+```bash
+# prerequisites
+node -v                     # 18+ (22 OK)
+twilio -v                   # Twilio CLI + serverless plugin
+twilio profiles:use         # ensure you're on the correct account
 
-## Environment Variables (Twilio Runtime)
-See `.env.example` in this repo. Set these on the **ui** environment:
-- `CALLER_ID`, `SMS_FROM`, `MESSAGING_SERVICE_SID`
-- `WEBSITE_URL`, `CLAIM_LINK`
-- `GEO_URL`, `DPL_MAP_JSON`
-- (Email) `SENDGRID_API_KEY`, `SENDGRID_FROM`, `SENDGRID_TO` *(optional — can use SMTP later)*
+# smoke locally against live env
+HOST="https://citvan-clean-6447-ui.twil.io"
+curl -sS -X POST "$HOST/main-menu?step=menu" | xmllint --format -
+Environments
+Service SID: ZScd92c9d2783301613f07144d0ed947b1 (citvan-clean)
 
-## One-time Twilio wiring
-Point your **phone number** to the proxy entry:
-twilio api:core:incoming-phone-numbers:update
---sid PN5b50a643eac89a552790dbe27b50a2b4
---voice-url "https://citvan-clean-6447-ui.twil.io/main-menu-proxy"
---voice-method POST
+Live env (UI): ui-environment → https://citvan-clean-6447-ui.twil.io
 
-shell
-Copy code
+Env SID: ZE400015407fe6344ee2b7603817c43ca9
 
-## Deploy
-npm run deploy
+Voice # (Voice/SMS): +1-604-200-3829 → POST https://citvan-clean-6447-ui.twil.io/main-menu?step=menu
 
+Release (Deploy + Attach + Tag + Verify)
 bash
 Copy code
-This uses the Twilio Serverless deploy (already set to service/env). It prints your build SID and live URLs.
-
-## Logs & Alerts
-- Tail logs:
-npm run logs
-
-diff
-Copy code
-- Recent error alerts:
-twilio api:monitor:v1:alerts:list --log-level error --limit 10
---properties sid,errorCode,alertText,requestUrl,requestMethod,dateCreated
-
-shell
-Copy code
-
-## Quick smoke tests (curl)
-> Replace `HOST` if your domain changes.
-HOST="https://citvan-clean-6447-ui.twil.io"
-
-Menu
-curl -sS -X POST "$HOST/main-menu?step=menu" | xmllint --format -
-
-Option 1 (Sales) happy path
-curl -sS -X POST "$HOST/sales?step=menu"
-curl -sS -X POST "$HOST/sales?step=choice" --data-urlencode Digits=1 --data-urlencode From="+16043295286"
-curl -sS -X POST "$HOST/sales?step=sms_confirm&from=%2B16043295286" --data-urlencode Digits=1
-
-Option 2 (Error lookup)
-curl -sS -X POST "$HOST/atm-error-lookup?step=collect"
-curl -sS -X POST "$HOST/atm-error-lookup?step=match" --data-urlencode Digits=31701
-curl -sS -X POST "$HOST/atm-error-lookup?step=match" --data-urlencode Digits=4
-curl -sS -X POST "$HOST/atm-error-lookup?step=match" --data-urlencode Digits=20002
-
-Option 3 (Issues mini)
-curl -sS -X POST "$HOST/issues-mini?step=start"
-curl -sS -X POST "$HOST/issues-mini?step=first" --data-urlencode "SpeechResult=my card is stuck"
-curl -sS -X POST "$HOST/issues-mini?step=first" --data-urlencode "SpeechResult=I didn't get my money"
-
-Option 4 (Tech callback)
-curl -sS -X POST "$HOST/tech-callback?step=start"
-
-shell
-Copy code
-
-## Rollback
-List recent builds
-twilio api:serverless:v1:services:builds:list --service-sid ZScd92c9d2783301613f07144d0ed947b1 --properties sid,dateCreated
-
-Promote a previous build to the 'ui' environment
-twilio api:serverless:v1:services:environments:deployments:create
---service-sid ZScd92c9d2783301613f07144d0ed947b1
---environment-sid ZE400015407fe6344ee2b7603817c43ca9
---build-sid ZBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-markdown
-Copy code
-
-## Git workflow
-- Work in a branch (e.g., `feature/foo`), open PR → merge to `main`.
-- Tag releases: `git tag -a deploy-YYYYMMDD-HHMM -m "snapshot"` → `git push --tags`
-- Optional prod pointer: `git tag -f prod-citvan-clean && git push -f origin prod-citvan-clean`
-
-## Notes
-- If you see “application error” on voice: tail logs with `npm run logs`.
-- If email bounces, prefer SMTP relay from your provider (no SDK required) or fix DMARC/DNS first.
-
-## Release & Verify (Production)
-
-**Live env:** `ui-environment` → `https://citvan-clean-6447-ui.twil.io`  
-**Service SID:** `ZScd92c9d2783301613f07144d0ed947b1`  
-**Env SID:** `ZE400015407fe6344ee2b7603817c43ca9`
-
-### One-liner release (deploy + attach + tag + verify)
-```bash
 ./scripts/release.sh
-Creates a new Twilio build, attaches it to ui-environment, creates a git tag: release-YYYYMMDD-HHMMSS-<ZB…>, and verifies the active build + a smoke test.
+Builds a new Twilio ZB… build, attaches to ui-environment, creates tag release-YYYYMMDD-HHMMSS-<ZB…>, verifies live build and a smoke test.
 
-Manual verify
+Verify Anytime
 bash
 Copy code
 ./scripts/verify.sh
-Prints the active Build SID, and runs quick TwiML checks (main menu + issues → card stuck).
+Outputs live Build SID and spot-checks TwiML.
 
-Branching policy
-Work in feature branches (e.g., work/copy-tweaks-and-error-codes)
+Rollback
+Choose a previous release-* tag → git checkout <tag> → optional patch → ./scripts/release.sh.
 
-Open PR → Squash & merge into main
-
-main is protected; releases come from main using ./scripts/release.sh
-
-Important URLs
+Common URLs
 Main menu (POST): https://citvan-clean-6447-ui.twil.io/main-menu?step=menu
 
 Issues (POST): https://citvan-clean-6447-ui.twil.io/issues
 
-Scripts reference: https://citvan-clean-6447-ui.twil.io/ivr-scripts.md
+IVR Scripts (canonical): https://citvan-clean-6447-ui.twil.io/ivr-scripts.md
+
+Contributing
+Branch from main → PR → Squash & merge.
+
+main is protected; all releases come from main.
 
